@@ -5,8 +5,9 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from db import (get_month_checks, get_month_habits, init_db,
+from db import (get_history_df, get_month_checks, get_month_habits, init_db,
                 save_month_checks, update_habit)
+from ml import MIN_DAYS, predict_today, streaks
 
 st.set_page_config(page_title="AI Habit Tracker", page_icon="✅", layout="wide")
 init_db()
@@ -168,3 +169,39 @@ else:
             )
         },
     )
+    # ---------- AI insights (uses all your history up to today) ----------
+st.divider()
+st.header("🤖 AI insights")
+history = get_history_df()
+if history.empty:
+    st.info("Tick a few habits and your streaks and predictions will appear here.")
+else:
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Streaks")
+        st.dataframe(streaks(history), hide_index=True, use_container_width=True)
+    with right:
+        st.subheader("Habits at risk today")
+        risk, info = predict_today(history)
+        if not info["ready"]:
+            st.info(
+                f"The model needs at least {MIN_DAYS} days of history with both "
+                f"done and missed days. You have {info['days']} so far. Keep ticking!"
+            )
+        else:
+            todo = risk[~risk["Done today"]].drop(columns="Done today")
+            if todo.empty:
+                st.success("All habits done today. Great job! 🎉")
+            else:
+                st.dataframe(
+                    todo, hide_index=True, use_container_width=True,
+                    column_config={"Chance (%)": st.column_config.ProgressColumn(
+                        "Chance of doing it today", min_value=0, max_value=100,
+                        format="%d%%")},
+                )
+            if info["accuracy"] is not None:
+                st.caption(
+                    f"Random forest trained on {info['days']} days. On the newest "
+                    f"days it was right {info['accuracy']:.0%} of the time, versus "
+                    f"{info['baseline']:.0%} for always guessing the most common answer."
+                )

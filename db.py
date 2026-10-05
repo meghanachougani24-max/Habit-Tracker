@@ -1,11 +1,16 @@
 import calendar
+import os
 from datetime import date, datetime
 
+import pandas as pd
+from dotenv import load_dotenv
 from sqlalchemy import (Column, Date, DateTime, ForeignKey, Integer, String,
                         UniqueConstraint, create_engine, delete, select)
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-engine = create_engine("sqlite:///habits.db")
+load_dotenv()  # reads .env if it exists
+DB_FILE = os.getenv("HABIT_DB", "habits.db")
+engine = create_engine(f"sqlite:///{DB_FILE}")
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -110,3 +115,26 @@ def save_month_checks(year: int, month: int, checks: dict[int, set[int]]):
             for hid, days in checks.items() for d in days
         )
         s.commit()
+def get_history_df() -> pd.DataFrame:
+    """One row per habit per day up to today: habit, date, done (1 or 0)."""
+    today = date.today()
+    with Session() as s:
+        habits = s.execute(select(Habit.id, Habit.year, Habit.month, Habit.name)).all()
+        ticks = {(hid, d) for hid, d in s.execute(
+            select(HabitLog.habit_id, HabitLog.log_date))}
+    if not ticks:  # nothing ticked yet, so nothing to learn from
+        return pd.DataFrame({"habit": [], "date": pd.to_datetime([]), "done": []})
+    first_day = min(d for _, d in ticks)  # the day you started tracking
+    rows = []
+    for hid, year, month, name in habits:
+        if not name.strip():
+            continue
+        for day in range(1, calendar.monthrange(year, month)[1] + 1):
+            d = date(year, month, day)
+            if d > today:
+                break
+            if d >= first_day:
+                rows.append((name.strip(), d, int((hid, d) in ticks)))
+    df = pd.DataFrame(rows, columns=["habit", "date", "done"])
+    df["date"] = pd.to_datetime(df["date"])
+    return df
